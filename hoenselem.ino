@@ -1,31 +1,41 @@
 
 const int GreenLED = 11;
 const int RedLED = 12;
+
 const int ButtonPin = 13;
+const int LimitTopPin = 7;
+const int LimitBotPin = 8;
 
 const int LightSensorPin = A0;
-const int PotentiometerPin = A1;
 
+// motor
+const int ControlPin1 = 2;
+const int ControlPin2 = 3;
+const int EnablePin = 10;
+
+// light sensor
 int lightValue = 0;
-int potValue = 0;
-
-const int openAbove = 600;
-const int closeBelow = 300;
+const int OpenAbove = 600;
+const int CloseBelow = 300;
 const int VotesRequired = 10;
 int nVotes = 0;
 
+// door states
 const int DoorClosed = 0;
 const int DoorOpen = 1;
 const int DoorMoving = -1;
 const int DoorUnknown = -2;
-
+const int DoorError = -3;
 int doorState = DoorUnknown;
 
-const int loopSleep = 10;
-int ms = 0;
+const int DoorTimeoutMs = 30000;
+const int Speed = 100;  // Speed 100 is around 8sec/rev which is roughly 1cm/sec with the black rubber roll
+
+// loop resolution
+// no action may block without itself providing a check for input with this interval
+const int LoopSleep = 10;
 
 void setup() {
-  // initialize digital pin LED_BUILTIN as an output.
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(GreenLED, OUTPUT);
   digitalWrite(GreenLED, LOW);
@@ -35,42 +45,30 @@ void setup() {
 
   // detect doorstate
   doorState = DoorUnknown;
+
+  pinMode(LimitTopPin, INPUT);
+  pinMode(LimitBotPin, INPUT);
+  pinMode(ControlPin1, OUTPUT);
+  pinMode(ControlPin2, OUTPUT);
+  pinMode(EnablePin, OUTPUT);
+  analogWrite(EnablePin, 0);
 }
 
 // main loop
 void loop() {
-  delay(loopSleep);
+  static int ms = 0;
   if (ms%1000 == 0){
   
     lightValue = analogRead(LightSensorPin);
-    potValue = analogRead(PotentiometerPin);
     Serial.print("light: ");
-    Serial.print(lightValue);
-    Serial.print("  pot: ");
-    Serial.println(potValue);
-
-    if (doorState != DoorClosed && lightValue < closeBelow) {
-      nVotes++;
-      if (nVotes == VotesRequired) {
-        closeDoor();
-        nVotes = 0;
-      }
-    }
-    else if (doorState != DoorOpen && lightValue > openAbove) {
-      nVotes++;
-      if (nVotes == VotesRequired) {
-        openDoor();
-        nVotes = 0;
-      }
-    }
-    else {
-      nVotes = 0;
-    }
+    Serial.println(lightValue);
+    
+    openDoorIfNeeded();
+    closeDoorIfNeeded();
   }
-  
-  if (doorState == DoorUnknown && ms%250 == 0) {
-    digitalWrite(GreenLED, ms%500);
-    digitalWrite(RedLED, ms%500);
+ 
+  if (doorState == DoorUnknown && ms%500 == 0) {
+    toggleRedAndGreen();
   }
 
   if (digitalRead(ButtonPin) == 1) {
@@ -81,40 +79,99 @@ void loop() {
       openDoor();
     }
   }
-  
-  ms += loopSleep;
+
+  delay(LoopSleep);
+  ms += LoopSleep;
   if (ms >= 1000){
     ms = 0;
   }
 }
 
-void openDoor() {
-
-  Serial.println("opening door");
-  doorState = DoorMoving;
-  digitalWrite(RedLED, LOW);
-  // simulate movement
-  for (int i = 0; i < 10; i++) {
-    digitalWrite(GreenLED, LOW);
-    delay(500);
-    digitalWrite(GreenLED, HIGH);
-    delay(500);
+void closeDoorIfNeeded() {
+  if (doorState != DoorClosed && lightValue < CloseBelow) {
+    nVotes++;
+    if (nVotes == VotesRequired) {
+      closeDoor();
+      nVotes = 0;
+    }
   }
+}
+
+void openDoorIfNeeded() {
+  if (doorState != DoorOpen && lightValue > OpenAbove) {
+    nVotes++;
+    if (nVotes == VotesRequired) {
+      openDoor();
+      nVotes = 0;
+    }
+  }
+  else {
+    nVotes = 0;
+  }
+}
+
+void openDoor() {
+  Serial.println("opening door");
+  digitalWrite(RedLED, LOW);
+  startMove(1);
+  doorState = DoorMoving;
+  for (int dt = 0; dt < DoorTimeoutMs; dt+=LoopSleep) {
+    if (dt%500 == 0) {
+      toggleGreen();
+    }
+
+    if (digitalRead(ButtonPin) == 1 && dt > 1000) {
+      break;
+    }
+    delay(LoopSleep);
+  }
+  stopMove();
   doorState = DoorOpen;
+  digitalWrite(GreenLED, HIGH);
   Serial.println("door open");
+  delay(1000);
 }
 
 void closeDoor() {
   Serial.println("closing door");
-  doorState = DoorMoving;
   digitalWrite(GreenLED, LOW);
-  // simulate movement
-  for (int i = 0; i < 10; i++) {
-    digitalWrite(RedLED, LOW);
-    delay(500);
-    digitalWrite(RedLED, HIGH);
-    delay(500);
+  doorState = DoorMoving;
+  startMove(0);
+  for (int dt = 0; dt < DoorTimeoutMs; dt+=LoopSleep) {
+    if (dt%500 == 0) {
+      toggleRed();
+    }
+    if (digitalRead(ButtonPin) == 1 && dt > 1000) {
+      break;
+    }
+    delay(LoopSleep);
   }
+  stopMove();
   doorState = DoorClosed;
+  digitalWrite(RedLED, HIGH);
   Serial.println("door closed");
+  delay(1000);
+}
+
+void startMove(int direction) {
+  digitalWrite(ControlPin1, direction);
+  digitalWrite(ControlPin2, !direction);
+  analogWrite(EnablePin, Speed);
+}
+
+void stopMove() {
+  analogWrite(EnablePin, 0);
+}
+
+void toggleRed() {
+  digitalWrite(RedLED, !digitalRead(RedLED));
+}
+
+void toggleGreen() {
+  digitalWrite(GreenLED, !digitalRead(GreenLED));
+}
+
+void toggleRedAndGreen() {
+  digitalWrite(RedLED, !digitalRead(GreenLED));
+  digitalWrite(GreenLED, !digitalRead(GreenLED));
 }
